@@ -1,6 +1,7 @@
 import multiprocessing
 import os
 from pathlib import Path
+import time
 import argparse
 import gradio as gr
 from utils.utils import (
@@ -48,83 +49,92 @@ class DataProcessorTab:
         self.dataprocessor_arg_names = []  # keep track of the dataprocessor args names
         self.dataprocessor_arg_idx = {}  # record the start and end index of the dataprocessor args
 
-        self.p = None
+        self.process = None
 
     def setup_ui(self):
+        self._build_layout()
+        self._wire_events()
+
+    def _build_layout(self):
         with gr.Tab(label="Process Data"):
-            status = gr.Textbox(label="Status", lines=1, placeholder="Waiting")
+            self.status = gr.Textbox(label="Status", lines=1, placeholder="Waiting")
+            self.timer  = gr.Timer(value=1, active=False)
+
             with gr.Row():
-                dataprocessor = gr.Radio(
+                self.dataprocessor = gr.Radio(
                     choices=list(dataprocessor_configs.keys()), label="Method", scale=5
                 )
-                run_button = gr.Button(value="Process", variant="primary", scale=1)
-                cmd_button = gr.Button(value="Show Command", scale=1)
-                stop_button = gr.Button(value="Stop", variant="stop", scale=1)
+                self.run_button = gr.Button(value="Process", variant="primary", scale=1)
+                self.cmd_button = gr.Button(value="Show Command", scale=1)
+                self.stop_button = gr.Button(value="Stop", variant="stop", scale=1)
 
             if os.name == "nt":
                 with gr.Row():
-                    data_path = gr.Textbox(
+                    self.data_path = gr.Textbox(
                         label="Data Path",
                         lines=1,
                         placeholder="Path to the data",
                         scale=4,
                     )
-                    browse_button = gr.Button(value="Browse Image", scale=1)
-                    browse_button.click(browse_folder, None, outputs=data_path)
-                    browse_video_button = gr.Button(value="Browse Video", scale=1)
-                    browse_video_button.click(browse_video, None, outputs=data_path)
-                    gr.ClearButton(components=[data_path], scale=1)
+                    self.browse_button = gr.Button(value="Browse Image", scale=1)
+                    self.browse_button.click(browse_folder, None, outputs=self.data_path)
+                    self.browse_video_button = gr.Button(value="Browse Video", scale=1)
+                    self.browse_video_button.click(browse_video, None, outputs=self.data_path)
+                    gr.ClearButton(components=[self.data_path], scale=1)
                 with gr.Row():
-                    output_dir = gr.Textbox(
+                    self.output_path = gr.Textbox(
                         label="Output Path",
                         lines=1,
                         placeholder="Path to the output folder",
                         scale=4,
                     )
-                    out_button = gr.Button(value="Browse", scale=1)
-                    out_button.click(browse_folder, None, outputs=output_dir)
-                    gr.ClearButton(components=[output_dir], scale=1)
+                    self.out_button = gr.Button(value="Browse", scale=1)
+                    self.out_button.click(browse_folder, None, outputs=self.output_path)
+                    gr.ClearButton(components=[self.output_path], scale=1)
             else:
                 with gr.Row():
-                    data_path = gr.Textbox(
+                    self.data_path = gr.Textbox(
                         label="Data Path",
                         lines=1,
                         placeholder="Path to the data",
                         scale=5,
                     )
-                    input_button = gr.Button(value="Submit", scale=1)
+                    self.input_button = gr.Button(value="Submit", scale=1)
+
                 with gr.Row():
-                    file_explorer = gr.FileExplorer(
+                    self.data_explorer = gr.FileExplorer(
                         label="Browse",
                         scale=1,
                         root_dir=self.root_dir,
                         file_count="multiple",
                         height=300,
                     )
-                    file_explorer.change(
-                        get_folder_path, inputs=file_explorer, outputs=data_path
+                    self.data_explorer.change(
+                        get_folder_path, inputs=self.data_explorer, outputs=self.data_path
                     )
-                    input_button.click(submit, inputs=data_path, outputs=data_path)
+                    self.input_button.click(submit, inputs=self.data_path, outputs=self.data_path)
+
                 with gr.Row():
-                    output_dir = gr.Textbox(
+                    self.output_path = gr.Textbox(
                         label="Output Path",
                         lines=1,
                         placeholder="Path to the output folder",
                         scale=5,
                     )
-                    out_button = gr.Button(value="Submit", scale=1)
+                    self.out_button = gr.Button(value="Submit", scale=1)
+
                 with gr.Row():
-                    file_explorer = gr.FileExplorer(
+                    self.output_explorer = gr.FileExplorer(
                         label="Browse",
                         scale=1,
                         root_dir=self.root_dir,
                         file_count="multiple",
                         height=300,
                     )
-                    file_explorer.change(
-                        get_folder_path, inputs=file_explorer, outputs=output_dir
+                    self.output_explorer.change(
+                        get_folder_path, inputs=self.output_explorer, outputs=self.output_path
                     )
-                    out_button.click(submit, inputs=output_dir, outputs=output_dir)
+                    self.out_button.click(submit, inputs=self.output_path, outputs=self.output_path)
 
             with gr.Accordion("Data Processor Config", open=False):
                 for key, config in dataprocessor_configs.items():
@@ -140,44 +150,68 @@ class DataProcessorTab:
                         self.dataprocessor_group_idx[key] = (
                             len(self.dataprocessor_groups) - 1
                         )
-                dataprocessor.change(
-                    self.update_dataprocessor_args_visibility,
-                    inputs=dataprocessor,
-                    outputs=self.dataprocessor_groups,
-                )
+        
+    def _wire_events(self):
+        ''' Connect events to the UI components '''
+         # show/hide config panels       
+        self.dataprocessor.change(
+            self.update_dataprocessor_args_visibility,
+            inputs=self.dataprocessor,
+            outputs=self.dataprocessor_groups,
+        )
+         
+         # run → get args → start job → show initial status + turn timer ON
+        self.run_button.click(
+            self.get_dataprocessor_args,
+            inputs=[self.dataprocessor] + self.dataprocessor_arg_list,
+            outputs=None,
+        ).then(
+            self.run_dataprocessor,
+            inputs=[self.dataprocessor, self.data_path, self.output_path],
+            outputs=[self.status, self.timer],
+        ).then(
+            lambda: ('Processing', gr.update(active=True)),
+            inputs=None,
+            outputs=self.timer,            
+        )
 
-            run_button.click(
-                self.get_dataprocessor_args,
-                inputs=[dataprocessor] + self.dataprocessor_arg_list,
-                outputs=None,
-            ).then(
-                self.run_dataprocessor,
-                inputs=[dataprocessor, data_path, output_dir],
-                outputs=status,
-            )
-            cmd_button.click(
-                self.get_dataprocessor_args,
-                inputs=[dataprocessor] + self.dataprocessor_arg_list,
-                outputs=None,
-            ).then(
-                self.generate_cmd,
-                inputs=[dataprocessor, data_path, output_dir],
-                outputs=status,
-            )
+        # Reiterative polling
+        self.timer.tick(
+            self.update_status,
+            inputs=None,
+            outputs=[self.status, self.timer]
+        )
 
-            stop_button.click(self.stop, inputs=None, outputs=status)
+        # Show the command
+        self.cmd_button.click(
+            self.get_dataprocessor_args,
+            inputs=[self.dataprocessor] + self.dataprocessor_arg_list,
+            outputs=None,
+        ).then(
+            self.generate_cmd,
+            inputs=[self.dataprocessor, self.data_path, self.output_path],
+            outputs=self.status,
+        )
 
-    def update_status(self, data_path, method, data_parser, visualizer):
-        if self.trainer is not None and self.trainer.step != 0:
-            return "Step: " + str(self.trainer.step)
-        else:
-            check = self.check(data_path, method, data_parser, visualizer)
-            if check is not None:
-                return check
-            return "Initializing..."
+        self.stop_button.click(self.stop, inputs=None, outputs=self.status)
 
-    def run_dataprocessor(self, datapocessor, data_path, output_dir):
-        if datapocessor == "":
+    def update_status(self):
+        # 1) never kicked off
+        if self.start_time is None:
+            return "Idle", gr.update(active=False)
+
+        # 2) still running
+        if self.process.is_alive():
+            elapsed = int(time.time() - self.start_time)
+            return f"In progress: {elapsed}s", gr.update(active=True)
+
+        # 3) finished
+        elapsed = int(time.time() - self.start_time)
+        return f"Done! ({elapsed}s)", gr.update(active=False)       
+            
+        
+    def run_dataprocessor(self, dataprocessor, data_path, output_dir):
+        if dataprocessor == "":
             return "Please select a data processor"
         if data_path == "":
             return "Please select a data path"
@@ -185,21 +219,22 @@ class DataProcessorTab:
             return "Please select a output directory"
 
         if self.run_in_new_terminal:
-            cmd = self.generate_cmd(datapocessor, data_path, output_dir)
+            cmd = self.generate_cmd(dataprocessor, data_path, output_dir)
             run_cmd(cmd)
         else:
             data_path = Path(data_path)
             output_dir = Path(output_dir)
-            processor = dataprocessor_configs[datapocessor]
+            processor = dataprocessor_configs[dataprocessor]
             processor.data = data_path
             processor.output_dir = output_dir
             for key, value in self.dataprocessor_args.items():
                 setattr(processor, key, value)
             # TODO: this will lead werid errors when running subprocesses in this subprocess
-            self.p = multiprocessing.Process(target=processor.main)
-            self.p.start()
-            self.p.join()
-            return "Processing finished"
+            self.process = multiprocessing.Process(target=processor.main)
+            self.process.start()
+            self.start_time = time.time()
+            # self.process.join()
+            return "Processing started", gr.update(active=True)
 
     def get_dataprocessor_args(self, dataprocessor, *args):
         temp_args = {}
@@ -232,15 +267,10 @@ class DataProcessorTab:
         return update_info
 
     def stop(self):
-        self.p.terminate()
+        self.process.terminate()
         return "Process stopped"
 
-    def generate_cmd(
-        self,
-        dataprocessor,
-        data_path,
-        output_dir,
-    ):
+    def generate_cmd(self, dataprocessor, data_path,output_dir):
         if dataprocessor == "":
             raise gr.Error("Please select a data processor")
         if data_path == "":

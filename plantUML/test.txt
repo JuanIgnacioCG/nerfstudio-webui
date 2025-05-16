@@ -1,0 +1,21 @@
+@startuml
+
+
+
+Person(user, "End User", "Interacts with the Nerfstudio WebUI via a browser")
+
+Container(browser, "Browser", "Web Browser", "Renders the Gradio-based UI and communicates via HTTP/WebSocket")
+Container(webui_app, "WebUI Server", "Python (Gradio)", "Hosts the Gradio Blocks app; serves HTTP & WebSocket endpoints; orchestrates NS CLI commands")
+Container(cli_core, "NS Core CLI & Library", "Python", "Implements the commands: ns-process-data, ns-train, ns-viewer, ns-export; performs data processing, training, visualization, exporting")
+Container(fs, "File System", "OS Filesystem", "Holds datasets, configs, outputs, logs")
+
+Rel(user, browser, "Uses")
+Rel(browser, webui_app, "Loads UI & interacts", "HTTPS / WebSocket")
+Rel(webui_app, cli_core, "Invokes", "Subprocess / CLI")
+Rel(cli_core, fs, "Reads/Writes", "File I/O")
+Rel(webui_app, fs, "Reads/Writes", "File I/O")
+
+@enduml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_WITH_LEGEND()

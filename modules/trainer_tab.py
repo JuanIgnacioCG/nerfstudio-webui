@@ -194,7 +194,7 @@ class TrainerTab(WebUITrainer):
                 self.update_status,
                 inputs=[data_path, method, dataparser, visualizer],
                 outputs=status,
-                every=1,
+                # every=1,
             )
 
             run_button.click(
