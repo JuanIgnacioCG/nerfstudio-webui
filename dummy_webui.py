@@ -1,8 +1,9 @@
 # dummy_webui.py
 import time
 import argparse
-import threading
 import gradio as gr
+import subprocess
+
 
 # 1) Stub out generate_args so we never call fields()
 import utils.utils as u
@@ -16,12 +17,22 @@ import webui
 # 3) A dummy processor _instance_ (not class!) that just sleeps & bumps progress
 class DummyProcessor:
     def __init__(self, *args, **kwargs):
-        self.progress = 0
+        self._proc = None
+        self.data = "."
+        self.output_dir = "."
+
     def main(self):
-        for i in range(5):
-            print('---', i)
-            time.sleep(0.5)
-            self.progress += 20
+        script_path = "dummy_script.py"  # Adjust path if needed
+        self._proc = subprocess.Popen(
+            ["python3", "-u", script_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True
+        )
+
+        # Wait for completion and continuously read output (simulates long process)
+        for line in self._proc.stdout:
+            print(line.strip())
 
 # 4) An InlineProcess that runs the bound .main() on a thread
 class InlineProcess:
@@ -61,6 +72,11 @@ def _build_with_default(self):
     self.dataprocessor.value = first
 
 DataProcessorTab._build_layout = _build_with_default
+
+def fake_generate_cmd(self, dataprocessor, data_path, output_dir):
+    return f"python dummy_script.py"
+
+DataProcessorTab.generate_cmd = fake_generate_cmd
 
 # 8) Launch the UI with only the DataProcessor tab
 if __name__ == "__main__":

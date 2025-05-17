@@ -1,4 +1,5 @@
 import multiprocessing
+import subprocess
 import os
 from pathlib import Path
 import time
@@ -20,7 +21,13 @@ from nerfstudio.scripts.process_data import (
     ProcessRecord3D,
     VideoToNerfstudioDataset,
 )
-from utils.utils import run_cmd
+from nerfstudio.process_data.colmap_converter_to_nerfstudio_dataset import ColmapConverterToNerfstudioDataset
+
+from utils.utils import run_cmd, extract_field_info
+
+field_constraints = extract_field_info(ColmapConverterToNerfstudioDataset)
+import pprint
+pprint.pprint(field_constraints)
 
 current_path = Path(__file__).parent
 dataprocessor_configs = {
@@ -138,18 +145,82 @@ class DataProcessorTab:
 
             with gr.Accordion("Data Processor Config", open=False):
                 for key, config in dataprocessor_configs.items():
-                    with gr.Group(visible=False) as group:
-                        generated_args, labels = generate_args(config, visible=True)
-                        self.dataprocessor_arg_list += generated_args
-                        self.dataprocessor_arg_names += labels
-                        self.dataprocessor_arg_idx[key] = [
-                            len(self.dataprocessor_arg_list) - len(generated_args),
-                            len(self.dataprocessor_arg_list),
-                        ]
-                        self.dataprocessor_groups.append(group)
-                        self.dataprocessor_group_idx[key] = (
-                            len(self.dataprocessor_groups) - 1
-                        )
+                    group, generated_args, labels = self._build_processor_ui(config)
+                    self.dataprocessor_arg_list += generated_args
+                    self.dataprocessor_arg_names += labels
+                    self.dataprocessor_arg_idx[key] = [
+                        len(self.dataprocessor_arg_list) - len(generated_args),
+                        len(self.dataprocessor_arg_list),
+                    ]
+                    self.dataprocessor_groups.append(group)
+                    self.dataprocessor_group_idx[key] = (
+                        len(self.dataprocessor_groups) - 1
+                    )
+
+    def _build_processor_ui(self, config_instance):
+        """
+        Dynamically build a Gradio UI group for the given data-processor config instance.
+
+        Returns a tuple:
+        - group: gr.Group containing all input components (initially hidden)
+        - components: list of gr.Components for reading .value when building commands
+        - names: list of field names corresponding to each component
+        """
+        # Extract field metadata from the dataclass
+        field_info = extract_field_info(type(config_instance))
+        field_info["verbose"] = {
+        "type": bool,
+        "valid_values": None,
+        "default": True,    # start “on” by default
+        }
+
+        components = []
+        names = []
+        # Create a hidden group to contain all inputs
+        with gr.Group(visible=False) as group:
+            for field_name, info in field_info.items():
+                typ = info["type"]
+                valid_values = info["valid_values"]
+                default = info["default"]
+
+                # Literal values → dropdown
+                if valid_values:
+                    comp = gr.Dropdown(
+                        choices=list(valid_values),
+                        label=field_name,
+                        value=default,
+                    )
+                # Boolean → checkbox
+                elif typ is bool:
+                    comp = gr.Checkbox(
+                        label=field_name,
+                        value=bool(default) if default is not None else False,
+                    )
+                # Numeric → number input
+                elif typ in (int, float):
+                    comp = gr.Number(
+                        label=field_name,
+                        value=default,
+                        precision=(0 if typ is int else None),
+                    )
+                # String → textbox
+                elif typ is str:
+                    comp = gr.Textbox(
+                        label=field_name,
+                        value=default if default is not None else "",
+                    )
+                # Fallback → textbox with str coercion
+                else:
+                    comp = gr.Textbox(
+                        label=field_name,
+                        value=str(default) if default is not None else "",
+                    )
+
+                components.append(comp)
+                names.append(field_name)
+
+        return group, components, names
+
         
     def _wire_events(self):
         ''' Connect events to the UI components '''
@@ -196,18 +267,22 @@ class DataProcessorTab:
         self.stop_button.click(self.stop, inputs=None, outputs=self.status)
 
     def update_status(self):
-        # 1) never kicked off
         if self.start_time is None:
             return "Idle", gr.update(active=False)
 
-        # 2) still running
-        if self.process.is_alive():
+        # Process is still running
+        if self.process.poll() is None:
+            output_line = self.process.stdout.readline()
+            print(">>>", output_line.strip())
             elapsed = int(time.time() - self.start_time)
-            return f"In progress: {elapsed}s", gr.update(active=True)
 
-        # 3) finished
-        elapsed = int(time.time() - self.start_time)
-        return f"Done! ({elapsed}s)", gr.update(active=False)       
+            if output_line:
+                return f"[{elapsed}s] {output_line.strip()}", gr.update(active=True)
+            else:
+                return gr.skip(), gr.update(active=True)
+        else:
+            elapsed = int(time.time() - self.start_time)
+            return f"Done! ({elapsed}s)", gr.update(active=False)    
             
         
     def run_dataprocessor(self, dataprocessor, data_path, output_dir):
@@ -217,9 +292,9 @@ class DataProcessorTab:
             return "Please select a data path"
         if output_dir == "":
             return "Please select a output directory"
-
+        
+        cmd = self.generate_cmd(dataprocessor, data_path, output_dir)
         if self.run_in_new_terminal:
-            cmd = self.generate_cmd(dataprocessor, data_path, output_dir)
             run_cmd(cmd)
         else:
             data_path = Path(data_path)
@@ -229,11 +304,14 @@ class DataProcessorTab:
             processor.output_dir = output_dir
             for key, value in self.dataprocessor_args.items():
                 setattr(processor, key, value)
-            # TODO: this will lead werid errors when running subprocesses in this subprocess
-            self.process = multiprocessing.Process(target=processor.main)
-            self.process.start()
+            self.process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                shell=True
+            )
             self.start_time = time.time()
-            # self.process.join()
             return "Processing started", gr.update(active=True)
 
     def get_dataprocessor_args(self, dataprocessor, *args):
@@ -251,12 +329,28 @@ class DataProcessorTab:
             ][1]
         ]
         for key, value in zip(names, values):
-            if isinstance(value, bool):
-                key = "no-" + key if not value else key
-                cmd += f" --{key}"
+            if key not in field_constraints:
+                continue
+
+            constraints = field_constraints[key]
+
+            # Skip empty values
+            if value in [None, ""]:
+                continue
+
+            # Enforce literal-based validation
+            if constraints["valid_values"] and value not in constraints["valid_values"]:
+                continue
+
+            if key == 'crop_bottom':
+                print('-----', key, value)
+            temp_args[key] = value
+
+            if constraints["type"] == bool:
+                key_str = f"--{key}" if value else f"--no-{key}"
+                cmd += f" {key_str}"
             else:
                 cmd += f" --{key} {value}"
-            temp_args[key] = value
         self.dataprocessor_args = temp_args
         self.dataprocessor_args_cmd = cmd
 
@@ -292,6 +386,9 @@ class DataProcessorTab:
         else:
             raise gr.Error("Invalid method")
 
-        cmd = f"ns-process-data {method} --data {data_path} --output_dir {output_dir} {self.dataprocessor_args_cmd}"
+        if os.name != "nt":
+            cmd = f"PYTHONUNBUFFERED=1 stdbuf -oL ns-process-data {method} --data {data_path} --output_dir {output_dir} {self.dataprocessor_args_cmd}"
+        else:
+            cmd = f"PYTHONUNBUFFERED=1 ns-process-data {method} --data {data_path} --output_dir {output_dir} {self.dataprocessor_args_cmd}"
 
         return cmd
