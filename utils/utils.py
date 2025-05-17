@@ -3,6 +3,8 @@ import subprocess
 # import tkinter as tk
 from dataclasses import asdict, fields, is_dataclass
 from pathlib import Path
+from typing import Any, Dict, Optional, Tuple, Type
+from typing_extensions import TypedDict
 # from tkinter import filedialog
 import re
 from typing import get_origin, get_args, Literal
@@ -54,11 +56,26 @@ def run_cmd(cmd):
                 "No suitable terminal emulator found. Please install one of the supported terminals or update the script."
             )
 
+class FieldConstraint(TypedDict):
+    type: Any
+    valid_values: Optional[Tuple[Any, ...]]
+    default: Any
 
-def extract_all_field_info(dataclass_type):
-    """Handles inheritance as well."""
+def extract_field_info(dataclass_type: Type[Any]) -> Dict[str, FieldConstraint]:
+    """
+    Extracts type, default, and literal options from all fields of a dataclass.
+
+    Args:
+        dataclass_type: A class object decorated with @dataclass.
+
+    Returns:
+        A dict mapping field names to a dict with keys:
+          - "type": the annotated type of the field
+          - "valid_values": a tuple of valid Literal values, or None
+          - "default": the default value, or None if none is set
+    """
     if not is_dataclass(dataclass_type):
-        raise ValueError("Expected a dataclass type")
+        raise ValueError("Provided type is not a dataclass")
 
     result = {}
     for f in fields(dataclass_type):
@@ -66,39 +83,18 @@ def extract_all_field_info(dataclass_type):
         origin = get_origin(type_)
         valid_values = get_args(type_) if origin is Literal else None
 
+        try:
+            default = f.default if f.default is not f.default_factory else None
+        except AttributeError:
+            default = None
+
         result[f.name] = {
             "type": type_,
             "valid_values": valid_values,
-            "default": f.default
+            "default": default
         }
+
     return result
-
-
-def extract_field_info(dataclass_type):
-    """Extracts type, default, and literal options from all fields (including inherited ones) of a dataclass."""
-    if not is_dataclass(dataclass_type):
-        raise ValueError("Provided type is not a dataclass")
-
-    field_info = {}
-    for f in fields(dataclass_type):
-        type_ = f.type
-        name = f.name
-        origin = get_origin(type_)
-        args = get_args(type_)
-
-        if origin is Literal:
-            valid_values = args
-        else:
-            valid_values = None 
-
-        field_info[name] = {
-            "type": type_,
-            "valid_values": valid_values,
-            "default": f.default if f.default is not f.default_factory else None
-        }
-
-    return field_info
-
 
 def generate_args(config, visible=True):
     # config_dict = asdict(config)

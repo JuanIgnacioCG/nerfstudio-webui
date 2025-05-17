@@ -1,10 +1,15 @@
 import multiprocessing
 import subprocess
 import os
+import re
 from pathlib import Path
+import logging
 import time
 import argparse
 import gradio as gr
+from typing import Tuple, Any, Literal, get_origin, get_args
+
+
 from utils.utils import (
     get_folder_path,
     browse_folder,
@@ -26,6 +31,7 @@ from nerfstudio.process_data.colmap_converter_to_nerfstudio_dataset import Colma
 from utils.utils import run_cmd, extract_field_info
 
 field_constraints = extract_field_info(ColmapConverterToNerfstudioDataset)
+field_constraints.pop('crop_factor', None)      # TODO: solve tuple(float, float,..), not implemented for dinamic UI+
 import pprint
 pprint.pprint(field_constraints)
 
@@ -41,22 +47,40 @@ dataprocessor_configs = {
 }
 
 
+BOX_CHARS = re.compile(r'[\u2500-\u257f]')
+
+def _clean_line(line: str) -> str:
+    # remove box‐drawing + trim
+    return BOX_CHARS.sub("", line).strip()
+
+
 class DataProcessorTab:
     def __init__(self, args: argparse.Namespace):
         super().__init__()
+        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger.info(
+            "Initializing DataProcessorTab",
+            extra={
+                "root_dir": args.root_dir,
+                "run_in_new_terminal": args.run_in_new_terminal,
+            },
+        )
+
         self.root_dir = args.root_dir  # root directory
         self.run_in_new_terminal = args.run_in_new_terminal  # run in new terminal
 
         self.dataprocessor_args = {}
         self.dataprocessor_args_cmd = ""
 
-        self.dataprocessor_groups = []  # keep track of the dataprocessor groups
+        self.dataprocessor_groups = []     # keep track of the dataprocessor groups
         self.dataprocessor_group_idx = {}  # keep track of the dataprocessor group index
-        self.dataprocessor_arg_list = []  # gr components for the dataprocessor args
+        self.dataprocessor_arg_list = []   # gr components for the dataprocessor args
         self.dataprocessor_arg_names = []  # keep track of the dataprocessor args names
-        self.dataprocessor_arg_idx = {}  # record the start and end index of the dataprocessor args
+        self.dataprocessor_arg_idx = {}    # record the start and end index of the dataprocessor args
 
         self.process = None
+        self.start_time = None
+
 
     def setup_ui(self):
         self._build_layout()
@@ -160,66 +184,106 @@ class DataProcessorTab:
     def _build_processor_ui(self, config_instance):
         """
         Dynamically build a Gradio UI group for the given data-processor config instance.
-
-        Returns a tuple:
-        - group: gr.Group containing all input components (initially hidden)
-        - components: list of gr.Components for reading .value when building commands
-        - names: list of field names corresponding to each component
+        Returns: (group, components, names)
         """
-        # Extract field metadata from the dataclass
         field_info = extract_field_info(type(config_instance))
-        field_info["verbose"] = {
-        "type": bool,
-        "valid_values": None,
-        "default": True,    # start “on” by default
-        }
+        field_info["verbose"] = {"type": bool, "valid_values": None, "default": True}
 
-        components = []
-        names = []
-        # Create a hidden group to contain all inputs
+        components, names = [], []
+        # TODO: avoid the data, output_dir, and eval_data
         with gr.Group(visible=False) as group:
             for field_name, info in field_info.items():
                 typ = info["type"]
-                valid_values = info["valid_values"]
                 default = info["default"]
+                valid_values = info["valid_values"]
 
-                # Literal values → dropdown
-                if valid_values:
-                    comp = gr.Dropdown(
-                        choices=list(valid_values),
-                        label=field_name,
-                        value=default,
-                    )
-                # Boolean → checkbox
-                elif typ is bool:
-                    comp = gr.Checkbox(
-                        label=field_name,
-                        value=bool(default) if default is not None else False,
-                    )
-                # Numeric → number input
-                elif typ in (int, float):
-                    comp = gr.Number(
-                        label=field_name,
-                        value=default,
-                        precision=(0 if typ is int else None),
-                    )
-                # String → textbox
-                elif typ is str:
-                    comp = gr.Textbox(
-                        label=field_name,
-                        value=default if default is not None else "",
-                    )
-                # Fallback → textbox with str coercion
-                else:
-                    comp = gr.Textbox(
-                        label=field_name,
-                        value=str(default) if default is not None else "",
-                    )
+                field_comps, field_names = self._make_field_components(field_name, typ, default, valid_values)
 
-                components.append(comp)
-                names.append(field_name)
+                # If it's a multi-element row, wrap them
+                if len(field_comps) > 1:
+                    with gr.Row():
+                        for c in field_comps:
+                            pass
+                
+                components.extend(field_comps)
+                names.extend(field_names)
 
         return group, components, names
+    
+
+    def _make_field_components(self, field_name, typ, default, valid_values):
+        """
+        Returns:
+          - a list of 1+ Gradio components for this field
+          - a list of corresponding field_name entries (one per component)
+        """
+        # 1) Literal → Dropdown
+        if valid_values:
+            comp = gr.Dropdown(
+                choices=list(valid_values),
+                label=field_name,
+                value=default,
+            )
+            return [comp], [field_name]
+
+        # 2) Bool → Checkbox
+        if typ is bool:
+            comp = gr.Checkbox(
+                label=field_name,
+                value=bool(default),
+            )
+            return [comp], [field_name]
+
+        # 3) Numeric → Number
+        if typ in (int, float):
+            comp = gr.Number(
+                label=field_name,
+                value=default,
+                precision=(0 if typ is int else None),
+            )
+            return [comp], [field_name]
+
+        # 4) Sequence → one component per element
+        origin = get_origin(typ)
+        args = get_args(typ)
+        if origin in (list, tuple) and args:
+            subtype = args[0]
+            length = len(default) if isinstance(default, (list, tuple)) else len(args)
+            comps, names = [], []
+            for i in range(length):
+                val = default[i] if isinstance(default, (list, tuple)) else None
+
+                if subtype is bool:
+                    c = gr.Checkbox(label=f"{field_name}[{i}]", value=bool(val))
+                elif subtype in (int, float):
+                    c = gr.Number(
+                        label=f"{field_name}[{i}]",
+                        value=val if val is not None else 0,
+                        precision=0 if subtype is int else None,
+                    )
+                elif get_origin(subtype) is Literal:
+                    opts = list(get_args(subtype))
+                    c = gr.Dropdown(
+                        label=f"{field_name}[{i}]",
+                        choices=opts,
+                        value=(val if val in opts else opts[0]),
+                    )
+                else:
+                    c = gr.Textbox(
+                        label=f"{field_name}[{i}]",
+                        value=str(val) if val is not None else "",
+                    )
+
+                comps.append(c)
+                names.append(field_name)
+            return comps, names
+
+        # 5) String or fallback → Textbox
+        comp = gr.Textbox(
+            label=field_name,
+            value=default if isinstance(default, str) else str(default or ""),
+        )
+        return [comp], [field_name]
 
         
     def _wire_events(self):
@@ -270,49 +334,59 @@ class DataProcessorTab:
         if self.start_time is None:
             return "Idle", gr.update(active=False)
 
-        # Process is still running
-        if self.process.poll() is None:
-            output_line = self.process.stdout.readline()
-            print(">>>", output_line.strip())
-            elapsed = int(time.time() - self.start_time)
+        code = self.process.poll()
+        if code is None:
+            raw = self.process.stdout.readline()
+            line = _clean_line(raw)
+            if line:
+                self.logger.info("Process output: %s", line)
+                return line, gr.update(active=True)
+            return gr.skip(), gr.update(active=True)
 
-            if output_line:
-                return f"[{elapsed}s] {output_line.strip()}", gr.update(active=True)
+        # Process has exited
+        elapsed = int(time.time() - self.start_time)
+        remaining = _clean_line(self.process.stdout.read())
+        self.start_time = None
+
+        if code != 0:
+            if remaining:
+                msg = f"Processor failed (code {code}), last output: {remaining}"
             else:
-                return gr.skip(), gr.update(active=True)
+                msg = f"Processor failed (code {code})"
+            self.logger.error(msg)
+            return f"Error (code {code})", gr.update(active=False)
         else:
-            elapsed = int(time.time() - self.start_time)
-            return f"Done! ({elapsed}s)", gr.update(active=False)    
+            self.logger.info("Processor completed successfully in %ds", elapsed)
+            return f"Done! ({elapsed}s)", gr.update(active=False)
+  
             
         
-    def run_dataprocessor(self, dataprocessor, data_path, output_dir):
-        if dataprocessor == "":
+    def run_dataprocessor(self, dataprocessor: str, data_path: str, output_dir: str)-> Tuple[str, dict]:
+        if not dataprocessor:
             return "Please select a data processor"
-        if data_path == "":
+        if not data_path:
             return "Please select a data path"
-        if output_dir == "":
-            return "Please select a output directory"
-        
-        cmd = self.generate_cmd(dataprocessor, data_path, output_dir)
-        if self.run_in_new_terminal:
-            run_cmd(cmd)
-        else:
-            data_path = Path(data_path)
-            output_dir = Path(output_dir)
-            processor = dataprocessor_configs[dataprocessor]
-            processor.data = data_path
-            processor.output_dir = output_dir
-            for key, value in self.dataprocessor_args.items():
-                setattr(processor, key, value)
+        if not output_dir:
+            return "Please select an output directory"
+
+        argv = self._parse_and_build_argv(dataprocessor, data_path, output_dir)
+        self.logger.info("Launching", extra={"argv": argv})
+
+        try:
             self.process = subprocess.Popen(
-                cmd,
+                argv,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                shell=True
+                shell=False,    # <-- only path
             )
-            self.start_time = time.time()
-            return "Processing started", gr.update(active=True)
+        except Exception:
+            self.logger.exception("Failed to spawn process")
+            return "Error launching", gr.update(active=False)
+        
+        self.logger.debug("Subprocess launched", extra={"pid": self.process.pid})
+        self.start_time = time.time()
+        return "Processing started", gr.update(active=True)
 
     def get_dataprocessor_args(self, dataprocessor, *args):
         temp_args = {}
@@ -361,7 +435,9 @@ class DataProcessorTab:
         return update_info
 
     def stop(self):
-        self.process.terminate()
+        if self.process:
+            self.logger.info("Terminating process", extra={"pid": self.process.pid})
+            self.process.terminate()
         return "Process stopped"
 
     def generate_cmd(self, dataprocessor, data_path,output_dir):
@@ -392,3 +468,33 @@ class DataProcessorTab:
             cmd = f"PYTHONUNBUFFERED=1 ns-process-data {method} --data {data_path} --output_dir {output_dir} {self.dataprocessor_args_cmd}"
 
         return cmd
+    
+    def _parse_and_build_argv(self, dataprocessor: str, data_path: str, output_dir: str) -> list[str]:
+        """
+        1) Pulls raw values out of self.dataprocessor_args
+        2) Uses field_constraints to decide flag format.
+        3) Returns a shell‐safe argv list for subprocess.Popen(shell=False).
+        """
+        # map tab name → CLI subcommand
+        subcmd_map  = {
+            "ImagesToNerfstudioDataset": "images",
+            "VideoToNerfstudioDataset": "video",
+            "ProcessPolycam": "polycam",
+            "ProcessRecord3D": "record3d",
+            "ProcessODM": "odm",
+        }
+        subcmd = subcmd_map[dataprocessor]
+        argv = ["ns-process-data", subcmd, "--data", data_path, "--output_dir", output_dir]
+
+        for key, val in self.dataprocessor_args.items():
+            decl_type = field_constraints[key]["type"]
+            flag = f"--{key.replace('_','-')}"
+            if decl_type is bool:
+                if val:
+                    argv.append(flag)
+            elif decl_type in (list, tuple):
+                argv.append(flag)
+                argv.extend(str(x) for x in val)
+            else:
+                argv.extend([flag, str(val)])
+        return argv

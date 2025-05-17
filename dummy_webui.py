@@ -3,7 +3,7 @@ import time
 import argparse
 import gradio as gr
 import subprocess
-
+from dataclasses import dataclass
 
 # 1) Stub out generate_args so we never call fields()
 import utils.utils as u
@@ -15,6 +15,7 @@ from modules.data_processor_tab import DataProcessorTab, dataprocessor_configs a
 import webui
 
 # 3) A dummy processor _instance_ (not class!) that just sleeps & bumps progress
+@dataclass
 class DummyProcessor:
     def __init__(self, *args, **kwargs):
         self._proc = None
