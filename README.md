@@ -1,61 +1,69 @@
-# Nerfstudio Gradio WebUI
+# Nerfstudio Gradio WebUI (Personal Fork)
 
-![Screenshot](screenshot.png)
+> **Status**  
+> This fork is maintained as a personal project to restore Windows/Docker support and update the interface to **Gradio 5.x** and **Nerfstudio 1.x** codebase.  
+> - Data-Processor tab: **Minor polishes required**  
+> - Train tab, Viser launch, Export tab: **work-in-progress**
 
-## Introduction
+---
 
-This repository provides a user-friendly web interface for [Nerfstudio](https://github.com/nerfstudio-project/nerfstudio) using the [Gradio](https://gradio.app/) library. The Nerfstudio Gradio WebUI allows users to easily train, visualize, process data, and export models without the need for complex command-line interactions.
+## Why this fork?
 
-## Features
+The upstream WebUI no longer runs out-of-the-box due to breaking changes in Gradio ≥4, alongside general improvements in installation, tutorials, and usage.  
 
-- **Training**: Train Nerfstudio models directly from the web interface by selecting the dataset path and corresponding data parser.
-- **Visualization**: Visualize trained models with Viser.
-- **Data Processing**: Process training data by selecting the dataset path, output path, and processing method.
-- **Model Export**: Export trained models by selecting the model configuration and output path.
+**This fork includes:**
 
-## Installation
+- Pinning compatible library versions (see `requirements.txt`).
+- Renewed Data-Processor pipeline to obtain configuration parameters.
+- Updated status—currently tested primarily in Process Data tab.
 
-1. Ensure that you have Nerfstudio (version >= 1.10) installed and set up properly.
+---
 
-2. Install the required dependencies by running the following command in the Nerfstudio environment:
+## Quick install (Python)
 
-   ```bash
-   pip install gradio
-   ```
+```bash
+git clone https://github.com/<your-username>/nerfstudio-gradio-webui.git
+cd nerfstudio-gradio-webui
+python -m venv .venv && source .venv/bin/activate  # optional
+pip install -r requirements.txt
+python webui.py  # use --help for additional flags
+```
 
-3. Clone this repository.
+**Alternatively, run inside Docker:**
 
-## Usage
+Refer to the original Nerfstudio installation section and use the included `docker/Dockerfile`.  
+*(Developed in the Nerfstudio 1.1.5 Docker image.)*
 
-1. Start the Nerfstudio Gradio WebUI by running the following command (Add --help to see more options):
+---
 
-   ```bash
-   python webui.py
-   ```
+## Before you run
 
-2. Open a web browser and navigate to `http://localhost:7860` to access the WebUI.
+Open your browser at `http://localhost:7860` and expect to be able to preprocess data and launch model training, but other features are not guaranteed. 
+Known limitations, with issue links, live in [docs/expectations.md](docs/expectations.md).
 
-3. Use the different tabs in the WebUI to perform various tasks:
+---
 
-   - **Training**: Select the dataset path and corresponding data parser, then click the "Train" button to start training. Monitor the training progress in the terminal.
+## Usage tutorials
 
-   - **Visualization**: Choose the "Visualize" tab, select the configuration file for the trained model, and click the "Visualize" button to launch the Viser tool.
+Head over to **docs/tutorials** for step-by-step guides:
 
-   - **Data Processing**: Choose the "Process Data" tab, select the dataset path, output path, and processing method. Click the "Submit" button to create a new folder if the output path doesn't exist. Then, click the "Process" button to start processing the data.
+- **[Quick-start](docs/tutorials/quickstart.md)** – process a dataset, train, visualize and export.
+- **Training** – *coming soon*  
+- **Export** – *coming soon*
 
-   - **Model Export**: Choose the "Export" tab, select the configuration file for the trained model and the output path. Click the "Export" button to start exporting the model.
+BDD acceptance scenarios are tracked under **features/**.
 
-4. Explore the different functionalities provided by the WebUI and enjoy a seamless experience with Nerfstudio!
-
-## Platforms
-
-Tested on Windows with 3070 and Linux with 2080ti. Multi-GPU untested. Subprocesses may not run properly on Windows when processing data.
+---
 
 ## Contributing
 
-This repo is still under developing and I'm currently an undergraduate student. Contributions to the Nerfstudio Gradio WebUI are super welcomed! If you encounter any issues or have suggestions for improvements, please open an issue or submit a pull request on the GitHub repository.
+Bug reports and PRs are welcome—see [CONTRIBUTING.md](CONTRIBUTING.md).  
+Students looking for first issues can search for the *good-first-issue* label.
 
-## Acknowledgments
+---
 
-- [Nerfstudio](https://github.com/nerfstudio-project/nerfstudio) - The main repository for Nerfstudio.
-- [Gradio](https://gradio.app/) - The library used for building the web interface.
+## Acknowledgements
+
+- [Nerfstudio](https://github.com/nerfstudio-project/nerfstudio) – neural rendering toolbox.  
+- [Gradio](https://gradio.app/) – UI toolkit powering the WebUI.
+- Upstream Repo.
