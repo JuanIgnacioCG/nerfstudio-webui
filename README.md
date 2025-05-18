@@ -56,7 +56,7 @@ Known limitations, with issue links, live in [docs/expectations.md](docs/expecta
 
 Head over to **docs/tutorials** for step-by-step guides:
 
-- **[Quick-start](docs/tutorials/quickstart.md)** – process a dataset, train, visualize and export.
+- **[Quick-start](docs/Tutorials/Quick-start.md)** – process a dataset, train, visualize and export.
 - **Training** – *coming soon*  
 - **Export** – *coming soon*
 
