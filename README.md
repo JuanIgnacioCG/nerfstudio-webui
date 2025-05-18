@@ -15,24 +15,33 @@ The upstream WebUI no longer runs out-of-the-box due to breaking changes in Grad
 
 - Pinning compatible library versions (see `requirements.txt`).
 - Renewed Data-Processor pipeline to obtain configuration parameters.
-- Updated status—currently tested primarily in Process Data tab.
+- New update status mechanism to check process output, tested primarily in Process Data tab.
 
 ---
 
 ## Quick install (Python)
 
+**If installing it in a docker container with Nerfstudio**
+1. Remember to map a new port for the webAPI in the container run command. Default=7860 ie.
+```bash
+docker run --gpus all --name NerfstudioWebUI `
+  -p 7007:7007 `    # viser
+  -p 7860:7860 `    # webUI
+  -it `
+   ...
+```
+
+2. Install
 ```bash
 git clone https://github.com/<your-username>/nerfstudio-gradio-webui.git
 cd nerfstudio-gradio-webui
 python -m venv .venv && source .venv/bin/activate  # optional
 pip install -r requirements.txt
-python webui.py  # use --help for additional flags
+python webui.py  --root-dir <your folder> # use --help for additional flags
 ```
 
-**Alternatively, run inside Docker:**
-
-Refer to the original Nerfstudio installation section and use the included `docker/Dockerfile`.  
-*(Developed in the Nerfstudio 1.1.5 Docker image.)*
+**Alternatively**
+Ensure nerfstudio is importable in your current environment. Then just do step 2.
 
 ---
 
